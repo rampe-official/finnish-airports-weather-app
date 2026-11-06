@@ -1,5 +1,7 @@
 # FMI Airport Weather
 
+![Screen capture](./assets/screencap.png)
+
 A React Native mobile application displaying live weather observations for Oulu and Turku airports, utilizing the Finnish Meteorological Institute (FMI) WFS 2.0.0 open data API.
 
 ## Features
