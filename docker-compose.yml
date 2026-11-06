@@ -1,0 +1,15 @@
+services:
+  expo-app:
+    build: .
+    container_name: fmi-weather-expo
+    network_mode: "host"
+    tty: true          # Forces Expo to render the QR code
+    stdin_open: true   # Allows interactive keyboard shortcuts
+    environment:
+     # Keep your actual WLAN IP here by exporting it to environment variable "export MY_WLAN_IP=192.AAA.BB.CCC"
+      - REACT_NATIVE_PACKAGER_HOSTNAME=${MY_WLAN_IP}
+      - CHOKIDAR_USEPOLLING=true
+    volumes:
+      - .:/app
+      - /app/node_modules
+    command: npx expo start --clear
