@@ -1,48 +1,69 @@
 import React from 'react';
+import { View } from 'react-native';
 import { WebView } from 'react-native-webview';
+import { AirportStation } from '../app/index'; // Adjust path if needed
 
-export default function OpenMap() {
+interface OpenMapProps {
+  airports: AirportStation[];
+  onSelectAirport: (airportId: string) => void;
+  mapCenter?: { lat: number; lng: number }; 
+}
+
+export default function OpenMap({ airports, onSelectAirport, mapCenter }: OpenMapProps) {
   const mapHtml = `
     <!DOCTYPE html>
     <html>
-    <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+      <head>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
         <style>
-            body { padding: 0; margin: 0; }
-            #map { width: 100%; height: 100vh; }
+          body, html { margin: 0; padding: 0; height: 100%; width: 100%; }
+          #map { height: 100%; width: 100%; }
         </style>
-    </head>
-    <body>
+      </head>
+      <body>
         <div id="map"></div>
-    <script>
-            // Initialize map without a hardcoded center or zoom
-            var map = L.map('map');
+        <script>
+          var map = L.map('map').setView([64.5, 26.0], 5);
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; OpenStreetMap'
+          }).addTo(map);
+
+          var airports = ${JSON.stringify(airports)};
+          
+          airports.forEach(function(ap) {
+            var marker = L.marker([ap.latitude, ap.longitude]).addTo(map);
+            marker.bindPopup("<b>" + ap.name + " (" + ap.code + ")</b>");
             
-            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                maxZoom: 19,
-                attribution: '© OpenStreetMap contributors'
-            }).addTo(map);
-
-            L.marker([64.9300, 25.3546]).addTo(map).bindPopup('Oulu Airport (OUL)');
-            L.marker([60.5141, 22.2618]).addTo(map).bindPopup('Turku Airport (TKU)');
-
-            // Automatically zoom and center to fit both airports
-            map.fitBounds([
-                [64.9300, 25.3546], // Oulu
-                [60.5141, 22.2618]  // Turku
-            ], { padding: [40, 40] });
+            marker.on('click', function() {
+              // Smoothly centers and zooms in on the clicked airport
+              map.flyTo([ap.latitude, ap.longitude], map.getZoom());
+              window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'markerClick', id: ap.id }));
+            });
+          });
         </script>
-    </body>
+      </body>
     </html>
   `;
 
   return (
-    <WebView 
-      source={{ html: mapHtml }} 
-      style={{ width: '100%', height: 300 }}
-      scrollEnabled={false}
-    />
+    <View style={{ flex: 1 }}>
+      <WebView
+        source={{ html: mapHtml }}
+        style={{ flex: 1 }}
+        onMessage={(event) => {
+          try {
+            const data = JSON.parse(event.nativeEvent.data);
+            if (data.type === 'markerClick') {
+              onSelectAirport(data.id);
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        }}
+      />
+    </View>
   );
 }

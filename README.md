@@ -2,13 +2,22 @@
 
 ![Screen capture](./assets/screencap.png)
 
-A React Native mobile application displaying live weather observations for Oulu and Turku airports, utilizing the Finnish Meteorological Institute (FMI) WFS 2.0.0 open data API.
+## 🌤 Features
+* **Live Aviation Weather:** Real-time temperature, wind, wind direcction, air pressure, and 1h precipitation for 9 Finnish international airports.
+* **Interactive OpenStreetMap:** Integrated Leaflet map. Tapping a map marker automatically scrolls the view to the corresponding airport's data card and centers to that airport.
+* **Climate-Aware UI:** Dynamic metric color-coding calibrated for Finnish weather thresholds (e.g., distinguishing freezing from chilly temperatures).
 
-## Features
-* Live parsing of FMI `timevaluepair` XML data.
-* Dynamic UI adapting to live metrics (temperature, wind, air pressure, rain).
-* Map integration displaying airport locations using OpenStreetMap and Leaflet (100% free, no API keys required).
-* Pull-to-refresh functionality with next-update estimations.
+## 📡 FMI API Integration & Architecture
+The app pulls live telemetry from the [Finnish Meteorological Institute (FMI) Open Data WFS API](https://en.ilmatieteenlaitos.fi/open-data). 
+
+**Key Technical Implementations:**
+* **Payload Optimization:** The default `fmi::observations::weather::simple` query returns up to 24 hours of data (9,000+ rows), which causes mobile timeouts. The app forces a `starttime` parameter locked to the last 60 minutes to ensure lightning-fast, lightweight payloads.
+* **Regex XML Parser:** Standard React Native DOM parsers struggle with FMI's complex `BsWfs` and `om:OM_Observation` namespace prefixes. The app utilizes a custom Regex-based parsing strategy to extract `ParameterName` and `ParameterValue` directly from the raw XML text string, ensuring 100% reliability.
+
+## 🛠 Tech Stack
+* **Framework:** React Native / Expo Router
+* **Map Engine:** `react-native-leaflet-view` (OpenStreetMap)
+* **Data Source:** FMI Open Data API (WFS 2.0)
 
 ## Prerequisites
 * [Docker Desktop](https://www.docker.com/products/docker-desktop) installed and running.
