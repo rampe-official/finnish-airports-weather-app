@@ -1,28 +1,28 @@
 {
   "expo": {
-    "name": "FMI Airport Weather",
-    "slug": "fmi-weather-app",
+    "name": "Finnish Airports Weather",
+    "slug": "finnish-airports-weather-app",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/fmi-weather-app-icon.png",
+    "icon": "./assets/images/finnish-airports-weather-app-icon.png",
     "scheme": "fmiweatherapp",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/images/fmi-weather-app-icon.png",
+      "icon": "./assets/images/finnish-airports-weather-app-icon.png",
       "bundleIdentifier": "com.xporampe.fmiweatherapp"
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#208AEF",
-        "foregroundImage": "./assets/images/fmi-weather-app-icon.png",
-        "backgroundImage": "./assets/images/fmi-weather-app-icon.png"
+        "foregroundImage": "./assets/images/finnish-airports-weather-app-icon.png",
+        "backgroundImage": "./assets/images/finnish-airports-weather-app-icon.png"
       },
       "predictiveBackGestureEnabled": false,
       "package": "com.xporampe.fmiweatherapp"
     },
     "web": {
       "output": "server",
-      "favicon": "./assets/images/fmi-weather-app-icon.png"
+      "favicon": "./assets/images/finnish-airports-weather-app-icon.png"
     },
     "plugins": [
       "expo-router",
@@ -30,7 +30,7 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#208AEF",
-          "image": "./assets/images/fmi-weather-app-icon.png",
+          "image": "./assets/images/finnish-airports-weather-app-icon.png",
           "imageWidth": 76
         }
       ],
