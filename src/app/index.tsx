@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { StyleSheet, Text, View, ActivityIndicator, SafeAreaView, ScrollView, RefreshControl } from 'react-native';
+import { StyleSheet, Text, View, ActivityIndicator, ScrollView, RefreshControl, TouchableOpacity } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { DOMParser } from '@xmldom/xmldom';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import OpenMap from '../components/openmap';
@@ -7,7 +8,7 @@ import OpenMap from '../components/openmap';
 export interface AirportStation {
   id: string;
   name: string;
-  code: string; // e.g., "EFHK"
+  code: string;
   fmisid: string;
   latitude: number;
   longitude: number;
@@ -20,9 +21,9 @@ export const INTERNATIONAL_AIRPORTS: AirportStation[] = [
   { id: 'rovaniemi', name: 'Rovaniemi', code: 'EFRO', fmisid: '101831', latitude: 66.562, longitude: 25.4402 },
   { id: 'kittila', name: 'Kittilä', code: 'EFKT', fmisid: '101932', latitude: 67.701, longitude: 24.8465 },
   { id: 'ivalo', name: 'Ivalo', code: 'EFIV', fmisid: '102035', latitude: 68.607, longitude: 27.4056 },
-  { id: 'kuusamo', name: 'Kuusamo', code: 'EFKS', fmisid: '101840', latitude: 65.9847, longitude: 29.2378 }, // Fixed FMISID
+  { id: 'kuusamo', name: 'Kuusamo', code: 'EFKS', fmisid: '101840', latitude: 65.9847, longitude: 29.2378 },
   { id: 'vaasa', name: 'Vaasa', code: 'EFVA', fmisid: '101464', latitude: 63.0503, longitude: 21.7622 },
-  { id: 'tampere', name: 'Tampere-Pirkkala', code: 'EFTP', fmisid: '101124', latitude: 61.414, longitude: 23.604 }, // Fixed FMISID
+  { id: 'tampere', name: 'Tampere-Pirkkala', code: 'EFTP', fmisid: '101124', latitude: 61.414, longitude: 23.604 },
 ];
 
 export default function App() {
@@ -33,27 +34,97 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastFetched, setLastFetched] = useState<Date | null>(null);
+  const [flightsData, setFlightsData] = useState<{ [icao: string]: { dep: any[], arr: any[] } }>({});
+  // Change from single string to dictionary object
+  const [flightModes, setFlightModes] = useState<{ [icao: string]: 'dep' | 'arr' }>({
+    'EFHK': 'dep', 'EFOU': 'dep', 'EFTU': 'dep', 'EFRO': 'dep',
+    'EFKT': 'dep', 'EFIV': 'dep', 'EFKS': 'dep', 'EFVA': 'dep', 'EFTP': 'dep'
+  });
+  const [loadingFlights, setLoadingFlights] = useState(false);
+  const [mapCenter, setMapCenter] = useState({ lat: 65.0, lng: 25.356 });
+  const [mapTouched, setMapTouched] = useState(false);
 
-// 1. Add state to track the map's center position
-  const [mapCenter, setMapCenter] = useState({ lat: 65.0, lng: 25.356 }); 
+  const fetchFinaviaFlights = async () => {
+    try {
+      setLoadingFlights(true);
+      const url = `https://apigw.finavia.fi/flights/public/v0/flights`;
 
-  // 2. Create the function to handle map interactions
-  const handleMapMessage = (message: any) => {
-    if (message.event === 'onMapMarkerClicked') {
-      const selectedId = message.payload.mapMarkerID;
-      const airport = INTERNATIONAL_AIRPORTS.find(a => a.id === selectedId);
+      const apiKey = process.env.EXPO_PUBLIC_FINAVIA_API_KEY ?? '';
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'app_key': apiKey.trim(),
+          'Accept': 'application/xml',
+          'Cache-Control': 'no-cache'
+        }
+      });
       
-      if (airport) {
-        setSelectedAirport(airport); // Update the weather card
-        setMapCenter({ lat: airport.latitude, lng: airport.longitude }); // Pan the map
-      }
+      const text = await response.text();
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(text, 'text/xml');
+      const cutoffTime = new Date(Date.now() - 30 * 60000);
+      const iataToIcao: { [key: string]: string } = {
+        'HEL': 'EFHK', 'OUL': 'EFOU', 'TKU': 'EFTU', 'RVN': 'EFRO',
+        'KTT': 'EFKT', 'IVL': 'EFIV', 'KAO': 'EFKS', 'VAA': 'EFVA', 'TMP': 'EFTP'
+      };
+
+      const newFlightsData: { [icao: string]: { dep: any[], arr: any[] } } = {};
+      INTERNATIONAL_AIRPORTS.forEach(a => { newFlightsData[a.code] = { dep: [], arr: [] }; });
+
+  const parseNode = (nodeName: 'dep' | 'arr') => {
+            const rootNode = xmlDoc.getElementsByTagName(nodeName)[0];
+            if (!rootNode) return;
+
+            const flightNodes = rootNode.getElementsByTagName('flight');
+            const now = new Date();
+
+            for (let i = 0; i < flightNodes.length; i++) {
+              const node = flightNodes[i];
+              const getTag = (tag: string) => node.getElementsByTagName(tag)[0]?.textContent || '';
+              const icao = iataToIcao[getTag('h_apt')];
+              if (icao && newFlightsData[icao]) {
+                const sdtString = getTag('sdt');
+                if (!sdtString) continue;
+
+                const flightTime = new Date(sdtString);
+
+                // Ensure it's happening today (local calendar day check) and after our 30-min past cutoff
+                const isToday =
+                  flightTime.getDate() === now.getDate() &&
+                  flightTime.getMonth() === now.getMonth() &&
+                  flightTime.getFullYear() === now.getFullYear();
+
+                if (isToday && flightTime > cutoffTime) {
+                  newFlightsData[icao][nodeName].push({
+                    fltnr: getTag('fltnr'),
+                    sdt: sdtString,
+                    route_n_1: getTag('route_n_1')
+                  });
+                }
+              }
+            }
+          };
+      parseNode('dep');
+      parseNode('arr');
+
+      Object.keys(newFlightsData).forEach(icao => {
+        const sortFn = (a: any, b: any) => new Date(a.sdt).getTime() - new Date(b.sdt).getTime();
+        newFlightsData[icao].dep = newFlightsData[icao].dep.sort(sortFn).slice(0, 5);
+        newFlightsData[icao].arr = newFlightsData[icao].arr.sort(sortFn).slice(0, 5);
+      });
+
+      setFlightsData(newFlightsData);
+    } catch (error) {
+      console.error('Failed to fetch Finavia data:', error);
+    } finally {
+      setLoadingFlights(false);
     }
   };
 
   const parseStationData = (text: string, fmisid: string) => {
     let temp = '--';
     let wind = '--';
-    let windDir = '--'; // Add wind direction
+    let windDir = '--';
     let pressure = '--';
     let rain = '--';
 
@@ -66,12 +137,12 @@ export default function App() {
       
       if (val && val !== '') {
         if (name === 'r_1h') {
-          rain = (val === 'NaN') ? '0.0' : val;
+          rain = (val === 'NaN') ? '0.0' : parseFloat(val).toFixed(1);
         } else if (val !== 'NaN') {
-          if (name === 't2m') temp = val;
-          if (name === 'ws_10min') wind = val;
-          if (name === 'wd_10min') windDir = val; // Capture wind direction
-          if (name === 'p_sea') pressure = val;
+          if (name === 't2m') temp = parseFloat(val).toFixed(1);
+          if (name === 'ws_10min') wind = parseFloat(val).toFixed(1);
+          if (name === 'wd_10min') windDir = val;
+          if (name === 'p_sea') pressure = Math.round(parseFloat(val)).toString();
         }
       }
     }
@@ -91,7 +162,8 @@ export default function App() {
           const url = `https://opendata.fmi.fi/wfs?service=WFS&version=2.0.0&request=getFeature&storedquery_id=fmi::observations::weather::simple&fmisid=${airport.fmisid}&starttime=${oneHourAgo}`;
           const response = await fetch(url);
           const text = await response.text();
-          results[airport.fmisid] = parseStationData(text, airport.fmisid);        })
+          results[airport.fmisid] = parseStationData(text, airport.fmisid);
+        })
       );
 
       setWeatherData(results);
@@ -106,11 +178,13 @@ export default function App() {
 
   useEffect(() => {
     fetchAllAirportsWeather();
+    fetchFinaviaFlights();
   }, []);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchAllAirportsWeather();
+    fetchFinaviaFlights();
   }, []);
 
   const formatTime = (date: Date | null) => {
@@ -125,13 +199,13 @@ export default function App() {
     return next.toLocaleTimeString('fi-FI', { hour: '2-digit', minute: '2-digit' });
   };
 
-const getTempColor = (tempValue: string) => {
+  const getTempColor = (tempValue: string) => {
     if (tempValue === '--') return '#64748b';
     const temp = parseFloat(tempValue);
     
-    if (temp <= 0) return '#3b82f6';  // Solid Blue for freezing and below
-    if (temp <= 10) return '#00a5a9'; // Sky Blue for chilly (+0.1 to +10.0)
-    if (temp <= 20) return '#f97316'; // Orange for mild (+10.1 to +20.0)
+    if (temp <= 0) return '#3b82f6';
+    if (temp <= 10) return '#00a5a9';
+    if (temp <= 20) return '#f97316';
     if (temp <= 25) return '#fa7333';
     return '#ef4444';
   };
@@ -139,32 +213,31 @@ const getTempColor = (tempValue: string) => {
   const getWindColor = (windValue: string) => {
     if (windValue === '--') return '#64748b';
     const wind = parseFloat(windValue);
-    if (wind <= 3) return '#10b981';  // Emerald Green: Calm to light breeze
-    if (wind <= 7) return '#0ea5e9';  // Sky Blue: Gentle to moderate breeze
-    if (wind <= 13) return '#f59e0b'; // Amber: Fresh breeze (noticeable wind)
-    if (wind <= 20) return '#f97316'; // Orange: Strong wind to gale (aviation caution)
+    if (wind <= 3) return '#10b981';
+    if (wind <= 7) return '#0ea5e9';
+    if (wind <= 13) return '#f59e0b';
+    if (wind <= 20) return '#f97316';
     return '#ef4444'; 
   };
 
   const getPressureColor = (pressureValue: string) => {
     if (pressureValue === '--') return '#64748b';
     const pressure = parseFloat(pressureValue);
-    if (pressure <= 990) return '#8b5cf6';  // Purple: Very low (deep depression / stormy)
-    if (pressure <= 1005) return '#0ea5e9'; // Sky Blue: Low (unsettled weather)
-    if (pressure <= 1015) return '#10b981'; // Emerald Green: Normal / average (around 1013 hPa)
-    if (pressure <= 1025) return '#f59e0b'; // Amber: High (fair / clear skies)
-    return '#f97316';                       // Orange: Very high (very stable / dry)
-    };
+    if (pressure <= 990) return '#8b5cf6';
+    if (pressure <= 1005) return '#0ea5e9';
+    if (pressure <= 1015) return '#10b981';
+    if (pressure <= 1025) return '#f59e0b';
+    return '#f97316';
+  };
 
   const getRainColor = (rainValue: string) => {
     if (rainValue === '--') return '#64748b';
     const rain = parseFloat(rainValue);
-    
-    if (rain <= 0) return '#94a3b8';    // Slate Light: No rain (dry)
-    if (rain <= 1.0) return '#38bdf8';  // Light Blue: Drizzle or very light rain
-    if (rain <= 4.0) return '#3b82f6';  // Solid Blue: Moderate rain
-    if (rain <= 10.0) return '#4f46e5'; // Indigo: Heavy rain
-    return '#312e81';                   // Deep Dark Blue/Indigo: Torrential downpour
+    if (rain <= 0) return '#94a3b8';
+    if (rain <= 1.0) return '#38bdf8';
+    if (rain <= 4.0) return '#3b82f6';
+    if (rain <= 10.0) return '#4f46e5';
+    return '#312e81';
   };
 
   const getCardinalDirection = (degStr: string) => {
@@ -174,8 +247,19 @@ const getTempColor = (tempValue: string) => {
     return cardinals[Math.round((deg % 360) / 45)];
   };
 
-  const renderWeatherCard = (title: string, data: any) => {
+  const renderWeatherCard = (title: string, data: any, icao: string) => {
     if (!data) return null;
+
+      const stationFlights = flightsData[icao] || { dep: [], arr: [] };
+      // Get mode specific to this airport card
+      const currentMode = flightModes[icao] || 'dep';
+      const currentFlights = stationFlights[currentMode] || [];
+
+      // Helper to update only this airport's mode
+      const setCardMode = (mode: 'dep' | 'arr') => {
+        setFlightModes(prev => ({ ...prev, [icao]: mode }));
+      };
+
     return (
       <View style={styles.card}>
         <Text style={styles.cityText}>{title}</Text>
@@ -185,55 +269,86 @@ const getTempColor = (tempValue: string) => {
             <MaterialCommunityIcons name="thermometer" size={24} color={getTempColor(data.temp)} style={styles.icon} />
             <Text style={styles.metricLabel}>Temperature</Text>
           </View>
-          <Text style={styles.metricValue}>{data.temp !== '--' ? `${data.temp} °C` : '--'}</Text>
+          <Text style={[styles.metricValue, { color: getTempColor(data.temp) }]}>
+            {data.temp}°C
+          </Text>
         </View>
         <View style={styles.divider} />
-        
-      {/* Wind Speed Row */}
+
         <View style={styles.metricRow}>
           <View style={styles.labelContainer}>
             <MaterialCommunityIcons name="weather-windy" size={24} color={getWindColor(data.wind)} style={styles.icon} />
             <Text style={styles.metricLabel}>Wind</Text>
           </View>
-          <Text style={styles.metricValue}>{data.wind !== '--' ? `${data.wind} m/s` : '--'}</Text>
+          <Text style={[styles.metricValue, { color: getWindColor(data.wind) }]}>
+            {data.wind} m/s {getCardinalDirection(data.windDir)}
+          </Text>
         </View>
-
-      {/* Wind Direction Row */}
-        {data.windDir !== '--' && (
-          <View style={styles.metricRow}>
-            <View style={styles.labelContainer}>
-              <MaterialCommunityIcons name="compass-outline" size={24} color="#64748b" style={styles.icon} />
-              <Text style={styles.metricLabel}>Wind dir</Text>
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <MaterialCommunityIcons 
-                name="arrow-down" 
-                size={20} 
-                color={getWindColor(data.wind)} 
-                style={{ transform: [{ rotate: `${data.windDir}deg` }] }}
-              />
-              <Text style={[styles.metricValue, { marginLeft: 8 }]}>
-                {data.windDir}° {getCardinalDirection(data.windDir)}
-              </Text>
-            </View>
-          </View>
-        )}
+        <View style={styles.divider} />
 
         <View style={styles.metricRow}>
           <View style={styles.labelContainer}>
             <MaterialCommunityIcons name="gauge" size={24} color={getPressureColor(data.pressure)} style={styles.icon} />
-            <Text style={styles.metricLabel}>Air Pressure</Text>
+            <Text style={styles.metricLabel}>Pressure</Text>
           </View>
-          <Text style={styles.metricValue}>{data.pressure !== '--' ? `${data.pressure} hPa` : '--'}</Text>
+          <Text style={[styles.metricValue, { color: getPressureColor(data.pressure) }]}>
+            {data.pressure} hPa
+          </Text>
         </View>
         <View style={styles.divider} />
-        
+
         <View style={styles.metricRow}>
           <View style={styles.labelContainer}>
             <MaterialCommunityIcons name="weather-pouring" size={24} color={getRainColor(data.rain)} style={styles.icon} />
             <Text style={styles.metricLabel}>Rain (1h)</Text>
           </View>
-          <Text style={styles.metricValue}>{data.rain !== '--' ? `${data.rain} mm` : '--'}</Text>
+          <Text style={[styles.metricValue, { color: getRainColor(data.rain) }]}>
+            {data.rain} mm
+          </Text>
+        </View>
+
+        <View style={{ marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderColor: '#e2e8f0' }}>
+
+        {/* Segmented Control Toggle */}
+        <View style={{ flexDirection: 'row', backgroundColor: '#f1f5f9', borderRadius: 8, padding: 4, marginBottom: 12 }}>
+          <TouchableOpacity
+            onPress={() => setCardMode('dep')}
+            style={{ flex: 1, paddingVertical: 6, alignItems: 'center', backgroundColor: currentMode === 'dep' ? '#ffffff' : 'transparent', borderRadius: 6, shadowColor: currentMode === 'dep' ? '#000' : 'transparent', shadowOpacity: 0.1, shadowRadius: 2, elevation: currentMode === 'dep' ? 2 : 0 }}
+          >
+            <Text style={{ fontWeight: '600', color: currentMode === 'dep' ? '#0f172a' : '#64748b' }}>Departures</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => setCardMode('arr')}
+            style={{ flex: 1, paddingVertical: 6, alignItems: 'center', backgroundColor: currentMode === 'arr' ? '#ffffff' : 'transparent', borderRadius: 6, shadowColor: currentMode === 'arr' ? '#000' : 'transparent', shadowOpacity: 0.1, shadowRadius: 2, elevation: currentMode === 'arr' ? 2 : 0 }}
+          >
+            <Text style={{ fontWeight: '600', color: currentMode === 'arr' ? '#0f172a' : '#64748b' }}>Arrivals</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Dynamic Flight List */}
+        {loadingFlights ? (
+          <Text style={{ color: '#64748b', textAlign: 'center', marginTop: 10 }}>Loading Finavia data...</Text>
+        ) : currentFlights.length > 0 ? (
+          currentFlights.map((flight, index) => (
+            <View key={index} style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+              <View>
+                <Text style={{ fontWeight: '500', color: '#334155' }}>
+                  {flight.route_n_1 || 'Unknown'}
+                </Text>
+                <Text style={{ fontSize: 12, color: '#64748b' }}>{flight.fltnr}</Text>
+              </View>
+              <View style={{ alignItems: 'flex-end' }}>
+                <Text style={{ fontWeight: '500', color: '#0f172a' }}>
+                  {flight.sdt ? new Date(flight.sdt).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '--:--'}
+                </Text>
+              </View>
+            </View>
+          ))
+        ) : (
+          <Text style={{ color: '#64748b', textAlign: 'center', marginTop: 10 }}>
+            No upcoming {currentMode === 'dep' ? 'departures' : 'arrivals'} found.
+          </Text>
+        )}
         </View>
       </View>
     );
@@ -259,8 +374,9 @@ const getTempColor = (tempValue: string) => {
   return (
     <SafeAreaView style={styles.container}>
       <Text style={styles.headerTitle}>FMI Airport Weather</Text>
-      <ScrollView 
+    <ScrollView
         ref={scrollViewRef}
+        scrollEnabled={!mapTouched}
         contentContainerStyle={styles.scrollContent}
         refreshControl={
           <RefreshControl 
@@ -271,47 +387,51 @@ const getTempColor = (tempValue: string) => {
           />
         }
       >
-        <View style={styles.mapContainer}>
-          <OpenMap 
-            airports={INTERNATIONAL_AIRPORTS}
-            mapCenter={mapCenter} // Pass the center state down to your custom component
-            onSelectAirport={(airportId) => {
-              const airport = INTERNATIONAL_AIRPORTS.find(a => a.id === airportId);
-              
-              if (airport) {
-                // 1. Center the map
-                setMapCenter({ lat: airport.latitude, lng: airport.longitude });
-                
-                // 2. Scroll the screen down to the selected airport's weather card
-                if (cardRefs.current[airport.fmisid]) {
-                  cardRefs.current[airport.fmisid]?.measure((x, y, width, height, pageX, pageY) => {
-                    scrollViewRef.current?.scrollTo({ y: pageY - 80, animated: true });
-                  });
-                }
-              }
-            }}
-          />
-        </View>
+    <View
+      style={styles.mapContainer}
+      onTouchStart={() => setMapTouched(true)}
+      onTouchEnd={() => setMapTouched(false)}
+      onTouchCancel={() => setMapTouched(false)}
+    >
+      <OpenMap
+        airports={INTERNATIONAL_AIRPORTS}
+        mapCenter={mapCenter}
+        onSelectAirport={(airportId) => {
+          const airport = INTERNATIONAL_AIRPORTS.find(a => a.id === airportId);
+          if (airport) {
+            setMapCenter({ lat: airport.latitude, lng: airport.longitude });
 
-        {INTERNATIONAL_AIRPORTS.map((airport) => (
-          <View key={airport.id} ref={(el) => { cardRefs.current[airport.fmisid] = el; }}>
-            {renderWeatherCard(`${airport.name} Airport`, weatherData[airport.fmisid])}
-          </View>
-        ))}
+            if (cardRefs.current[airport.fmisid]) {
+              cardRefs.current[airport.fmisid]?.measure((x, y, width, height, pageX, pageY) => {
+                scrollViewRef.current?.scrollTo({ y, animated: true });
+              });
+            }
+          }
+        }}
+      />
+    </View>
 
+        {/* Timestamp Location */}
         {lastFetched && (
-          <View style={styles.timestampContainer}>
+          <View style={[styles.timestampContainer, { marginBottom: 20 }]}>
             <MaterialCommunityIcons name="clock-outline" size={20} color="#64748b" style={{ marginRight: 6 }} />
             <View>
               <Text style={styles.timestampText}>
-                Data fetched at {formatTime(lastFetched)}
+                Weather & Flights updated at {formatTime(lastFetched)}
               </Text>
               <Text style={styles.timestampSubText}>
-                Next FMI update available ~{getNextUpdateTarget(lastFetched)}
+                Next data refresh available ~{getNextUpdateTarget(lastFetched)}
               </Text>
             </View>
           </View>
         )}
+
+        {INTERNATIONAL_AIRPORTS.map((airport) => (
+          <View key={airport.id} ref={(el) => { cardRefs.current[airport.fmisid] = el; }}>
+            {renderWeatherCard(`${airport.name} Airport`, weatherData[airport.fmisid], airport.code)}
+          </View>
+        ))}
+
       </ScrollView>
     </SafeAreaView>
   );
@@ -321,6 +441,15 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#f8fafc',
+  },
+  centerContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+  },
+  scrollContent: {
+    paddingBottom: 40,
   },
   header: {
     padding: 16,
@@ -333,34 +462,32 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#0f172a',
     textAlign: 'center',
+    paddingVertical: 16,
   },
-  mapContainer: {
-    height: 380, // We expanded this earlier!
-    width: '100%',
-    backgroundColor: '#e2e8f0',
-  },
-  cardContainer: {
-    flex: 1,
-    padding: 16,
-  },
-  
   mapContainer: {
     height: 380,
     borderRadius: 16,
     overflow: 'hidden',
     marginBottom: 20,
+    marginHorizontal: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.05,
     shadowRadius: 10,
     elevation: 4,
   },
-  map: {
-    width: '100%',
-    height: '100%',
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 24,
+    marginBottom: 20,
+    marginHorizontal: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 4
   },
-
-  card: { backgroundColor: '#ffffff', borderRadius: 16, padding: 24, marginBottom: 20, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.05, shadowRadius: 10, elevation: 4 },
   cityText: { fontSize: 22, fontWeight: '700', color: '#1e293b', marginBottom: 20 },
   metricRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12 },
   labelContainer: { flexDirection: 'row', alignItems: 'center' },
